@@ -1,0 +1,102 @@
+# MACE training on the MAD-1.0 dataset.
+# https://archive.materialscloud.org/records/xdsbt-a3r17  (95,595 structures, 85 elements, PBESol DFT)
+#
+# To run on MAD:
+#   data/download_mad.sh                       # downloads to data/mad/  (or pass an alt dir)
+#   sbatch scripts/sbatch_mace_mad.sh
+#
+# To train on your own data instead:
+#   - swap `train_file` / `valid_file` / `test_file` to point at your extxyz files
+#   - check that `energy_key` / `forces_key` (and `stress_key`, if you have stresses)
+#     match the keys inside your frames
+#   - if your dataset's composition doesn't vary (one molecule, one element ratio),
+#     either prepend IsolatedAtom frames to your train file OR set `E0s:` explicitly
+#
+# Hyperparameters follow the MACE production recipe documented at
+# https://mace-docs.readthedocs.io/en/latest/training/setting_up.html
+# Every key here is a `mace.cli.run_train` flag; see `mace_run_train --help`
+# for the full surface area.
+
+# --- run identity ----------------------------------------------------------
+name: mace_mad
+seed: 1234
+
+# --- output ----------------------------------------------------------------
+# ${MLIP_RUNS}/${MLIP_DATA} are set by the sbatch script and expanded by
+# workshop2.run before MACE sees the YAML (default: alongside the repo).
+work_dir: ${MLIP_RUNS}/mace_mad
+
+# --- compute ---------------------------------------------------------------
+device: cuda
+default_dtype: float32           # MACE-MP foundations trained at f32; faster on GPU
+distributed: true                # required for multi-rank DDP launches
+
+# --- data ------------------------------------------------------------------
+train_file: ${MLIP_DATA}/mad/mad-train.xyz
+valid_file: ${MLIP_DATA}/mad/mad-val.xyz
+test_file:  ${MLIP_DATA}/mad/mad-test.xyz
+
+energy_key: energy               # MAD uses bare extxyz keys
+forces_key: forces
+# stress_key: stress             # uncomment if your dataset has stresses
+compute_stress: false            # set true when stress_key is present
+
+# Per-element atomic-energy references (E0s). MAD ships no IsolatedAtom
+# frames, so we ask MACE to least-squares-fit them from the training set's
+# varying composition. Without an explicit setting MACE asserts "Atomic
+# energies must be provided", so `E0s: average` is required here.
+# For homogeneous-composition datasets (single molecule, fixed ratios) the
+# LSQ fit is rank-deficient -- instead prepend IsolatedAtom config_type
+# frames to train_file, or give an explicit dict: E0s: '{1: -13.6, 8: -2044.0}'.
+E0s: average
+
+# --- model architecture ----------------------------------------------------
+# Small workshop model: ~0.78M params (matched to the XS PET in pet_mad.yaml).
+# A production MACE-MP-medium uses num_channels=128 (~4.5M here); bump
+# num_channels back up for a real run. max_L is kept at 2 so the higher
+# angular features + correlation=3 (4-body) character is intact.
+model: ScaleShiftMACE
+r_max: 5.0                       # cutoff in Angstrom
+num_interactions: 2              # message-passing layers
+correlation: 3                   # body-order at each layer -> 4-body features
+max_ell: 3                       # angular order of spherical harmonics
+num_channels: 32                 # small; production MACE-MP "medium" is 128
+max_L: 2                         # 0 = scalars only, 1 = +vectors, 2 = +rank-2 tensors
+MLP_irreps: 16x0e
+gate: silu
+
+# --- loss ------------------------------------------------------------------
+loss: weighted
+energy_weight: 1.0
+forces_weight: 100.0             # E:F = 1:100 is MACE's documented default
+# stress_weight: 10.0            # uncomment alongside compute_stress: true
+
+# --- optimiser & schedule --------------------------------------------------
+optimizer: adamw
+lr: 0.01
+weight_decay: 5.0e-7
+amsgrad: true
+ema: true
+ema_decay: 0.99
+batch_size: 16
+valid_batch_size: 16
+max_num_epochs: 200
+patience: 50
+scheduler: ReduceLROnPlateau
+lr_factor: 0.8
+scheduler_patience: 5
+clip_grad: 100.0
+
+# --- SWA finishing phase ---------------------------------------------------
+# MACE's documented production recipe: a stochastic-weight-averaging tail
+# that up-weights energies. Usually buys ~10-30% RMSE on validation.
+swa: true
+start_swa: 150                   # start the SWA phase at ~75% of max_num_epochs
+swa_lr: 1.0e-3
+swa_energy_weight: 1000.0
+swa_forces_weight: 100.0
+# swa_stress_weight: 10.0        # uncomment alongside compute_stress: true
+
+# --- logging ---------------------------------------------------------------
+log_level: INFO
+error_table: PerAtomRMSE

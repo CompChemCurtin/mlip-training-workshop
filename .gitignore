@@ -1,0 +1,13 @@
+*.egg-info/
+__pycache__/
+.venv/
+.DS_Store
+uv.lock
+
+# local working docs (not part of the published workshop)
+IMPLEMENTATION_PLAN.md
+notes/
+runs/
+
+# bulk datasets fetched on demand by data/fetch_water.sh
+data/full/

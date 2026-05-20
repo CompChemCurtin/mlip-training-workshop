@@ -1,0 +1,89 @@
+# PET training on the MAD-1.0 dataset, via metatrain (`mtt train`).
+# https://archive.materialscloud.org/records/xdsbt-a3r17  (95,595 structures, 85 elements, PBESol DFT)
+#
+# To run on MAD:
+#   data/download_mad.sh                       # downloads to data/mad/
+#   sbatch scripts/sbatch_pet_mad.sh
+#
+# To train on your own data instead:
+#   - swap `read_from` paths under {training,validation,test}_set
+#   - check the target `key` matches what your extxyz frames carry
+#
+# Hyperparameters follow metatrain's documented PET defaults; see
+# https://metatensor.org/metatrain/latest/architectures/pet.html
+# (we set them explicitly here even where they match the default, so the
+# config doubles as documentation of what's in play).
+
+seed: 1234
+
+architecture:
+  name: pet
+  model:
+    # XS-scale PET (~0.75M params) -- a small but full-architecture model
+    # for the workshop, ~4x smaller than a production PET-MAD (which uses
+    # d_pet=128 / d_node=256 / 8 heads, ~2.9M params here). Bump these back
+    # up for a real run; the four capacity/cutoff levers are:
+    cutoff: 4.5                # neighbour cutoff in Å (PET-MAD-S uses 7.5)
+    d_pet: 64                  # edge feature dimension
+    d_node: 128                # node feature dimension
+    num_gnn_layers: 2
+    num_attention_layers: 2
+    # Secondary architecture hypers:
+    d_head: 64
+    d_feedforward: 128
+    num_heads: 4
+    normalization: RMSNorm
+    activation: SwiGLU
+    transformer_type: PreLN
+    cutoff_function: Bump
+    cutoff_width: 0.5
+  training:
+    distributed: true          # required for the srun one-task-per-GCD launch
+    # distributed_port: 39591  # metatrain default; MASTER_PORT for the rank rendezvous
+    batch_size: 16
+    num_epochs: 1000
+    learning_rate: 1.0e-4
+    warmup_fraction: 0.01
+    grad_clip_norm: 1.0
+    log_mae: true
+    checkpoint_interval: 100
+    best_model_metric: mae_prod
+    loss: mse                  # MSE on E and F (metatrain default)
+    # `atomic_baseline: {}` (default) makes metatrain least-squares-fit a
+    # per-element baseline from the training set, which is the right call
+    # for MAD's 85-element diversity.
+
+training_set:
+  systems:
+    read_from: ${MLIP_DATA}/mad/mad-train.xyz
+    length_unit: angstrom
+  targets:
+    energy:
+      key: energy              # MAD uses bare extxyz keys
+      unit: eV
+      forces:
+        key: forces
+      # stress:                # uncomment if your dataset has stresses
+      #   key: stress
+
+validation_set:
+  systems:
+    read_from: ${MLIP_DATA}/mad/mad-val.xyz
+    length_unit: angstrom
+  targets:
+    energy:
+      key: energy
+      unit: eV
+      forces:
+        key: forces
+
+test_set:
+  systems:
+    read_from: ${MLIP_DATA}/mad/mad-test.xyz
+    length_unit: angstrom
+  targets:
+    energy:
+      key: energy
+      unit: eV
+      forces:
+        key: forces

@@ -1,0 +1,77 @@
+# Local smoke test for PET training via metatrain.
+#
+# Trains a tiny PET on the workshop1 ethanol subset for a couple of epochs
+# on CPU, to verify your metatrain install works before queueing the real
+# run. PET is trained with metatrain's CLI directly (no wrapper) -- this
+# config uses no ${VAR}s, so just point the CLI at it.
+#
+# Run from the repo root (writes model.pt + outputs/ in the cwd):
+#
+#     python -m metatrain train workshop2/configs/smoke_ethanol_pet.yaml \
+#         -o smoke_pet_model.pt -e extensions
+#
+# The same file is used for training, validation, and test -- a sanity
+# check, not a benchmark. For real runs, split first with data/split_xyz.py.
+
+seed: 1234
+
+architecture:
+  name: pet
+  model:
+    cutoff: 4.5
+    d_pet: 32
+    d_node: 32
+    num_gnn_layers: 1
+    num_attention_layers: 1
+    d_head: 32
+    d_feedforward: 64
+    num_heads: 2
+    normalization: RMSNorm
+    activation: SwiGLU
+    transformer_type: PreLN
+    cutoff_function: Bump
+    cutoff_width: 0.5
+  training:
+    distributed: false
+    batch_size: 4
+    num_epochs: 2
+    learning_rate: 1.0e-3
+    warmup_fraction: 0.01
+    grad_clip_norm: 1.0
+    log_mae: true
+    checkpoint_interval: 1
+    best_model_metric: mae_prod
+    loss: mse
+
+training_set:
+  systems:
+    read_from: data/ethanol_subset.xyz
+    length_unit: angstrom
+  targets:
+    energy:
+      key: REF_energy
+      unit: eV
+      forces:
+        key: REF_forces
+
+validation_set:
+  systems:
+    read_from: data/ethanol_subset.xyz
+    length_unit: angstrom
+  targets:
+    energy:
+      key: REF_energy
+      unit: eV
+      forces:
+        key: REF_forces
+
+test_set:
+  systems:
+    read_from: data/ethanol_subset.xyz
+    length_unit: angstrom
+  targets:
+    energy:
+      key: REF_energy
+      unit: eV
+      forces:
+        key: REF_forces

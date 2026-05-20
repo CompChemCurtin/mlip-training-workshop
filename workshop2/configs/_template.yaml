@@ -1,0 +1,117 @@
+# Workshop 2 — production MACE training config.
+#
+# Copy this file, fill in the placeholders marked PLACEHOLDER, edit the
+# hyperparameters as needed, and run:
+#
+#     python -m workshop2.run --config workshop2/configs/<your-copy>.yaml
+#
+# Strings of the form ${VAR} are expanded from your shell environment
+# before the config is handed to mace.cli.run_train, so one config can
+# be re-used by multiple users on the same cluster.
+#
+# Every key here corresponds to a flag on mace.cli.run_train. To see
+# every available knob:  mace_run_train --help
+
+# -------- run identity --------
+name: PLACEHOLDER_run_name        # used for logs/, checkpoints/, the .model file
+seed: 1234
+
+# -------- output paths --------
+# work_dir is the parent of logs/, checkpoints/, results/. ${MLIP_RUNS} is
+# set by the sbatch script (defaults to <submit-dir>/runs); any ${VAR} in
+# the environment is expanded by workshop2.run at load time.
+work_dir: ${MLIP_RUNS}/PLACEHOLDER_run_name
+
+# -------- compute --------
+device: cuda                      # cuda | cpu | mps; rocm gpus also use 'cuda'
+default_dtype: float64            # float64 for accuracy; float32 ~2x faster
+distributed: true                 # required for multi-rank torchrun/srun launches
+
+# -------- data --------
+# Train file is required; valid_fraction holds out a random slice for
+# validation. Use valid_file instead if you want a fixed split.
+train_file: PLACEHOLDER_train.xyz
+valid_fraction: 0.1
+# valid_file: PLACEHOLDER_valid.xyz
+# test_file: PLACEHOLDER_test.xyz
+
+# Property keys inside the extxyz frames.
+energy_key: REF_energy
+forces_key: REF_forces
+stress_key: REF_stress
+
+# Per-element atomic energies (E0s). Three options, in order of cleanliness:
+#   (a) include IsolatedAtom config_type frames in train_file (recommended)
+#   (b) provide a dict-string here:
+#         E0s: '{1: -13.587, 6: -1029.489, 8: -2041.840}'
+#   (c) leave unset and let MACE LSQ-fit them from train_file (only works
+#       when the dataset has varying composition)
+
+# -------- model architecture --------
+model: ScaleShiftMACE
+r_max: 5.0                        # graph cutoff in Angstrom
+num_interactions: 2               # message-passing layers
+correlation: 3                    # body order at each layer (3 -> 4-body features)
+max_ell: 3                        # angular order of spherical harmonics
+num_channels: 128                 # invariant channels per node
+max_L: 1                          # 0 = scalars only, 1 = +vectors, 2 = +tensors
+MLP_irreps: 16x0e
+gate: silu
+compute_stress: false             # true for periodic data with stress targets
+
+# -------- loss --------
+loss: weighted
+energy_weight: 1.0
+forces_weight: 100.0
+stress_weight: 10.0
+# typical starting point E:F:S = 1 : 100 : 10
+
+# -------- optimiser & schedule --------
+optimizer: adamw
+lr: 0.01
+weight_decay: 5.0e-7
+amsgrad: true
+ema: true
+ema_decay: 0.99
+batch_size: 16
+valid_batch_size: 16
+max_num_epochs: 200
+patience: 50                      # early-stop if no val improvement for this many epochs
+scheduler: ReduceLROnPlateau
+lr_factor: 0.8
+scheduler_patience: 5
+clip_grad: 100.0
+
+# -------- SWA: averaged-weights phase at the end of training --------
+# A short SWA phase usually buys ~10-30% RMSE on validation. start_swa
+# must be < max_num_epochs; SWA up-weights energies relative to forces.
+swa: true
+start_swa: 150
+swa_lr: 1.0e-3
+swa_forces_weight: 100.0
+swa_energy_weight: 1000.0
+swa_stress_weight: 10.0
+
+# -------- foundation / fine-tuning (optional) --------
+# Warm-start from a foundation model. 'small'/'medium'/'large' fetch
+# MACE-MP; alternatively pass a local .model path.
+# foundation_model: small
+# multiheads_finetuning: false    # true for replay-data multihead workflow
+
+# -------- multi-head training (used by stage 3 examples) --------
+# heads is a Python dict literal: head_name -> {train_file, E0s, weights}.
+# Per-head loss weights let you balance heads with different magnitudes.
+# heads: |
+#   {"head_a": {"train_file": "${MLIP_DATA}/data_a.xyz",
+#               "E0s": "{1: -13.6, 8: -2044.0}",
+#               "energy_weight": 1.0, "forces_weight": 100.0},
+#    "head_b": {"train_file": "${MLIP_DATA}/data_b.xyz",
+#               "E0s": "{1: 0.006, 8: 3.913}",
+#               "energy_weight": 100.0, "forces_weight": 1000.0}}
+
+# -------- logging --------
+log_level: INFO
+error_table: PerAtomRMSE
+# wandb: true
+# wandb_project: PLACEHOLDER_project_name
+# wandb_entity: PLACEHOLDER_entity

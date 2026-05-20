@@ -1,0 +1,90 @@
+# Workshop 2 — production PET training config (metatrain).
+#
+# Copy this file, fill in the PLACEHOLDER bits, and train with metatrain's
+# CLI directly. The final model path (-o) must be a bare filename, so cd
+# into your run directory first; metatrain puts checkpoints/logs in
+# outputs/<timestamp>/ there:
+#
+#     mkdir -p runs/<your_run> && cd runs/<your_run>
+#     python -m metatrain train /abs/path/to/<your-copy>.yaml \
+#         -o model.pt -e extensions
+#
+# metatrain doesn't expand ${VAR} env references; either use absolute paths
+# in `read_from` or pre-expand the file (the sbatch scripts do the latter).
+#
+# Every key under `architecture` is a metatrain PET hyperparameter; see
+# https://metatensor.org/metatrain/latest/architectures/pet.html
+
+seed: 1234
+
+architecture:
+  name: pet
+  model:
+    # --- capacity / cutoff: the levers worth tuning ---
+    cutoff: 5.0                # neighbour cutoff in Angstrom
+    d_pet: 128                 # edge feature dimension
+    d_node: 256                # node feature dimension
+    num_gnn_layers: 2
+    num_attention_layers: 2
+    # --- secondary hypers: usually leave at these defaults ---
+    d_head: 128
+    d_feedforward: 256
+    num_heads: 8
+    normalization: RMSNorm
+    activation: SwiGLU
+    transformer_type: PreLN
+    cutoff_function: Bump
+    cutoff_width: 0.5
+  training:
+    distributed: true          # required for multi-rank torchrun/srun launches
+    batch_size: 16
+    num_epochs: 1000
+    learning_rate: 1.0e-4
+    warmup_fraction: 0.01
+    grad_clip_norm: 1.0
+    log_mae: true
+    checkpoint_interval: 100
+    best_model_metric: mae_prod
+    loss: mse
+    # E0s / atomic reference energies: metatrain least-squares-fits a
+    # per-element baseline from the training set by default. No IsolatedAtom
+    # frames or explicit refs needed -- unlike MACE, you don't have to do
+    # anything here for varying-composition data.
+
+# --- data ------------------------------------------------------------------
+# Point these at your splits (see data/split_xyz.py). `key` must match the
+# property names inside your extxyz frames (the Properties=... header).
+training_set:
+  systems:
+    read_from: PLACEHOLDER_train.xyz
+    length_unit: angstrom
+  targets:
+    energy:
+      key: REF_energy          # or `energy` for bare-key datasets
+      unit: eV
+      forces:
+        key: REF_forces        # or `forces`
+      # stress:                # uncomment for periodic data with stresses
+      #   key: REF_stress
+
+validation_set:
+  systems:
+    read_from: PLACEHOLDER_val.xyz
+    length_unit: angstrom
+  targets:
+    energy:
+      key: REF_energy
+      unit: eV
+      forces:
+        key: REF_forces
+
+test_set:
+  systems:
+    read_from: PLACEHOLDER_test.xyz
+    length_unit: angstrom
+  targets:
+    energy:
+      key: REF_energy
+      unit: eV
+      forces:
+        key: REF_forces

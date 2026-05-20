@@ -1,0 +1,71 @@
+# Local smoke test for the Workshop 2 MACE wrapper.
+#
+# Trains a deliberately tiny ScaleShiftMACE on the workshop1 ethanol
+# subset for a couple of epochs on CPU. The purpose is *only* to verify
+# the wrapper chain works end-to-end before you queue real training on
+# a cluster:
+#
+#   - ${VAR} expansion in workshop2.run
+#   - mace.cli.run_train accepting the parsed YAML
+#   - reading REF_energy / REF_forces from extxyz
+#   - writing a .model file out to work_dir
+#
+# Run from the repo root:
+#
+#     python -m workshop2.run --config workshop2/configs/smoke_ethanol_mace.yaml
+#
+# Finishes in ~30 s on a laptop CPU. The resulting model is meaningless
+# (no SWA, tiny channels, 2 epochs); use it to confirm wiring, not to do
+# anything physical with.
+
+name: smoke_ethanol_mace
+seed: 1234
+
+work_dir: runs/smoke_ethanol_mace
+
+device: cpu
+default_dtype: float64
+distributed: false
+
+train_file: data/ethanol_subset.xyz
+valid_fraction: 0.2
+
+energy_key: REF_energy
+forces_key: REF_forces
+compute_stress: false
+
+# Model — small enough to fit in seconds of CPU time.
+model: ScaleShiftMACE
+r_max: 5.0
+num_interactions: 2
+correlation: 3
+max_ell: 2
+num_channels: 16
+max_L: 0
+MLP_irreps: 4x0e
+gate: silu
+
+# Loss — same canonical weighting as the rest of the workshop.
+loss: weighted
+energy_weight: 1.0
+forces_weight: 100.0
+
+# Optimiser — short, no SWA, no EMA. Just enough to verify the loop.
+optimizer: adamw
+lr: 1.0e-2
+weight_decay: 5.0e-7
+amsgrad: true
+ema: false
+batch_size: 4
+valid_batch_size: 4
+max_num_epochs: 3
+patience: 50
+scheduler: ReduceLROnPlateau
+lr_factor: 0.8
+scheduler_patience: 5
+clip_grad: 100.0
+
+swa: false
+
+log_level: INFO
+error_table: PerAtomRMSE
