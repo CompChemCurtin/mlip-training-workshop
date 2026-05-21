@@ -111,6 +111,40 @@ hardware.) The reads to pull out:
 - **pet → mace**: similar budget, equivariance built in rather than
   learned — forces come out best.
 
+## Commands at a glance
+
+Every runnable module is `python -m workshop1.<name>` from the repo root.
+All take `--device auto|cpu|cuda|mps` and default to `data/ethanol_subset.xyz`.
+
+```bash
+# Train one architecture across the five loss recipes (E-only … E:F=100:1).
+python -m workshop1.train --model mace --epochs 100
+
+# One loss recipe (E:F=1:100), all four architectures, one comparison table.
+python -m workshop1.compare_models --epochs 100   # drop --epochs for the full run
+
+# Validation error vs training-set size, on a fixed model.
+python -m workshop1.data_efficiency --model bonded_ff --sizes 25 50 100 160
+
+# Short Langevin MD under one checkpoint (writes a trajectory).
+python -m workshop1.md --checkpoint runs/compare/mace.pt --steps 1000 --temperature 300
+
+# Distributions + energy profiles (PMF) of internal coords vs the training data.
+python -m workshop1.md_compare \
+    -c runs/compare/bonded_ff.pt -l bonded_ff \
+    -c runs/compare/mace.pt      -l mace \
+    --steps 4000 --temperature 500
+
+# Harmonic frequencies (finite-difference Hessian) per checkpoint, side by side.
+python -m workshop1.vibrations \
+    -c runs/compare/bonded_ff.pt -l bonded_ff \
+    -c runs/compare/mace.pt      -l mace
+```
+
+`train` writes one checkpoint per recipe under `runs/metrics_<model>/`;
+`compare_models` writes one per architecture under `runs/compare/`. The
+`md*` and `vibrations` commands consume those `.pt` checkpoints.
+
 ## Reading order
 
 The modules are designed to be read top-down:
