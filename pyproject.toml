@@ -9,14 +9,16 @@ dependencies = [
     # comes in transitively via these two.
     "mace-torch",
     "upet",
-    # Permissive lower bound on torch so site-specific wheels (CUDA, ROCm)
-    # can satisfy the constraint with whatever recent version is available.
+    # Permissive lower bound on torch so a site-specific wheel (CPU, CUDA,
+    # ROCm) installed *first* satisfies the constraint. See the README:
+    # torch is installed in a separate step from the right PyTorch index,
+    # because its GPU wheels are too platform-narrow for a single resolve.
     "torch>=2.7.1",
+    "openmm",
+    "openmmml",
 ]
 
 [tool.uv]
 # Treat this repo as a deps-only project — no build, no install of the
-# `workshop1`/`workshop2` packages themselves. `uv sync` should populate
-# `.venv` with the dependencies; run the workshop code with
-# `python -m workshop1.<module>` from the repo root.
+# `workshop1`/`workshop2` packages themselves.
 package = false

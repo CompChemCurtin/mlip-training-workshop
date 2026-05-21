@@ -42,25 +42,54 @@ scripts/      # SLURM scripts (MAD examples + a generic template)
 
 ## Setup
 
-```bash
-uv venv && uv sync
-```
+Two steps: install the `torch` wheel that matches your hardware **first**,
+then everything else. This ordering matters — torch's GPU wheels live on
+PyTorch's own indexes (not PyPI), and installing them first means the
+later step sees torch as already satisfied and won't pull the large
+default CUDA wheel over it.
 
-Direct dependencies are just `mace-torch` and `upet`; everything else
-(torch, ase, e3nn, matplotlib, the metatensor / metatomic / metatrain /
-omegaconf / vesin / scipy stack) comes in transitively.
-
-On GPU-attached clusters where `torch` needs a vendor wheel
-(CUDA / ROCm), install that wheel **first** so the rest of the stack
-resolves against it. Example for AMD GPUs with ROCm 6.3 (e.g. Setonix):
+### With uv
 
 ```bash
-# site-specific module load first, e.g. `module load rocm/6.3.0`
 uv venv
-uv pip install torch --index-url https://download.pytorch.org/whl/rocm6.3
-uv sync
+
+# 1. torch for your hardware — pick ONE:
+uv pip install torch --index-url https://download.pytorch.org/whl/cpu      # CPU / no GPU
+uv pip install torch --index-url https://download.pytorch.org/whl/cu124    # NVIDIA CUDA
+uv pip install torch --index-url https://download.pytorch.org/whl/rocm6.3  # AMD ROCm
+
+# 2. everything else (torch already satisfied)
+uv pip install mace-torch upet openmm openmmml
+
+# 3. AMD only — HIP platform for OpenMM (skip on CPU / NVIDIA)
+uv pip install openmm-hip-6
 ```
 
-For other ROCm or CUDA versions, swap the index URL accordingly (see
-<https://pytorch.org/get-started/locally/>). Ask your instructor for
-the cluster-specific module loads and sbatch directives.
+### With plain pip (no uv)
+
+```bash
+python -m venv .venv && source .venv/bin/activate
+
+# 1. torch for your hardware — pick ONE:
+pip install torch --index-url https://download.pytorch.org/whl/cpu      # CPU / no GPU
+pip install torch --index-url https://download.pytorch.org/whl/cu124    # NVIDIA CUDA
+pip install torch --index-url https://download.pytorch.org/whl/rocm6.3  # AMD ROCm
+
+# 2. everything else (torch already satisfied)
+pip install mace-torch upet openmm openmmml
+
+# 3. AMD only — HIP platform for OpenMM (skip on CPU / NVIDIA)
+pip install openmm-hip-6
+```
+
+The five top-level packages are `torch`, `mace-torch`, `upet`, `openmm`,
+and `openmmml`; the rest of the stack (ase, e3nn, matplotlib, metatensor
+/ metatomic / metatrain / omegaconf / vesin / scipy) is pulled in
+transitively.
+
+For a different CUDA / ROCm version, swap the index URL — e.g. `rocm6.3`
+→ `rocm6.2`, or `cu124` → `cu128` (see
+<https://pytorch.org/get-started/locally/>). On clusters, do the
+site-specific module load first (e.g. `module load rocm/6.3.0`) and ask
+your instructor for the cluster-specific module loads and sbatch
+directives.
