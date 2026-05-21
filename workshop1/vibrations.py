@@ -131,10 +131,10 @@ def plot_spectrum(results: Dict[str, np.ndarray], out_path: Path) -> None:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--checkpoint", action="append", required=True,
+    p.add_argument("-c", "--checkpoint", action="append", required=True,
                    type=Path, dest="checkpoints",
                    help="A checkpoint to analyse. Repeat for each one.")
-    p.add_argument("--label", action="append", default=None, dest="labels",
+    p.add_argument("-l", "--label", action="append", default=None, dest="labels",
                    help="Human-readable label for the corresponding --checkpoint.")
     p.add_argument("--xyz", type=Path, default=Path("data/ethanol_subset.xyz"))
     p.add_argument("--out", type=Path, default=Path("runs/vibrations"))

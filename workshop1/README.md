@@ -249,16 +249,24 @@ on Setonix via `MLPotential('mace').createSystem(topology, model_path=...)`
 
 ### Is the PES right? (`md_compare.py`, `vibrations.py`)
 
-Both scripts take any combination of `--checkpoint <path> --label <name>`
+Both scripts take any combination of `--checkpoint/-c <path> --label/-l <name>`
 pairs and produce a side-by-side comparison.
 
 `md_compare.py` runs a short Langevin trajectory under each model and
-overlays four observables — C–C bond, C–O bond, ∠C–C–O, C–C–O–H dihedral
+compares four observables — C–C bond, C–O bond, ∠C–C–O, C–C–O–H dihedral
 — against the same observables computed from the training-data frames.
-A potential with the right PES gives histograms that line up with the
-reference; one with no angular awareness will smear or shift the angle
-panel; one with a wrong torsion barrier will redistribute mass across
-the dihedral panel.
+The plot has two rows: the top overlays the smooth distributions P(q),
+and the bottom turns each into the energy profile it implies, the
+potential of mean force `W(q) = -kT ln[P(q)/J(q)]` (with the geometric
+Jacobian `J`: r² for bonds, sinθ for the angle, 1 for the dihedral).
+The distribution is *not* the potential — `W(q)` is what you recover by
+inverting it, and its wells and barriers are what you already know for
+ethanol (a stiff harmonic C–C, the ~1–1.5 kcal/mol OH-torsion barrier in
+the dihedral). A potential with the right PES gives distributions that
+line up with the reference and a PMF with the same well positions and
+barrier heights; one with no angular awareness smears or shifts the
+angle panel; one with a wrong torsion barrier gets the dihedral well
+depths wrong.
 
 `vibrations.py` is the T=0 complement. For each checkpoint it relaxes
 to the local energy minimum (BFGS), builds the Hessian by displacing

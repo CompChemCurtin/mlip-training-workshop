@@ -7,18 +7,31 @@ frames. The real test is dynamics: take each checkpoint, run a short MD
 trajectory, and compare *distributions of internal coordinates* against
 the same distributions in the training data.
 
-We compute four observables on each trajectory and on the training data,
-and overlay the histograms:
+We compute four observables on each trajectory and on the training data:
 
     - C-C bond length        (bedrock; converges in <1 ps)
     - C-O bond length        (the polar bond)
     - C-C-O angle            (sensitive to angular awareness)
     - C-C-O-H dihedral       (the slow mode; OH rotation barrier)
 
-A "right-ish" potential gives histograms whose means line up with the
-training data and whose widths track it. A model with no angles
-(`pair_morse`) will misshape the angle histogram; a model with a wrong
-torsion barrier will redistribute mass across the dihedral periods.
+The plot has two rows. The top row overlays the *distributions* P(q) as
+smooth kernel-density curves. The bottom row turns each distribution into
+the *energy profile* it implies — the potential of mean force
+
+    W(q) = -kT ln[P(q) / J(q)]
+
+where J(q) is the geometric volume element (r^2 for a bond, sin(theta)
+for the angle, 1 for the dihedral). The histogram is *not* the potential:
+it is the Boltzmann-sampled distribution, and W(q) is what you recover by
+inverting it. Peaks in P(q) become minima of W(q); the OH torsion's
+~1-1.5 kcal/mol barrier shows up directly as the bump in the dihedral
+PMF (and kT ~ 1.0 kcal/mol at 500 K, so the wells stay populated).
+
+A "right-ish" potential gives distributions whose means line up with the
+training data and an energy profile with the same well positions and
+barrier heights. A model with no angles (`pair_morse`) misshapes the
+angle PMF; a model with a wrong torsion barrier gets the dihedral well
+depths wrong.
 
     python -m workshop1.md_compare \\
         --checkpoint runs/compare/pair_morse.pt --label pair_morse \\
@@ -175,12 +188,67 @@ def run_md_trajectory(
 
 # ---------- plotting -----------------------------------------------------
 
+# key, axis label, lo, hi (None = derive from training range), measure kind.
+# `kind` selects the Jacobian J(q) used to turn P(q) into an energy profile
+# and flags the dihedral as periodic so its KDE wraps at ±180°.
 PANEL_SPEC = [
-    ("CC",       "C–C bond (Å)",    None,           None),
-    ("CO",       "C–O bond (Å)",    None,           None),
-    ("ang_CCO",  "∠C–C–O (°)",      None,           None),
-    ("dih_CCOH", "C–C–O–H (°)",     -180.0,         180.0),
+    ("CC",       "C–C bond (Å)",    None,    None,   "bond"),
+    ("CO",       "C–O bond (Å)",    None,    None,   "bond"),
+    ("ang_CCO",  "∠C–C–O (°)",      None,    None,   "angle"),
+    ("dih_CCOH", "C–C–O–H (°)",     -180.0,  180.0,  "dihedral"),
 ]
+
+KB_KCAL = 0.0019872041  # Boltzmann constant in kcal/mol/K
+
+
+def _bandwidth(samples: np.ndarray, *, periodic: bool) -> float:
+    """Silverman-rule KDE bandwidth; uses circular spread for periodic angles."""
+    n = max(samples.size, 2)
+    if periodic:
+        ang = np.deg2rad(samples)
+        R = float(np.hypot(np.cos(ang).mean(), np.sin(ang).mean()))
+        spread = np.rad2deg(np.sqrt(-2.0 * np.log(max(R, 1e-8))))
+    else:
+        spread = float(samples.std())
+    return max(1.06 * spread * n ** (-0.2), 1e-6)
+
+
+def _kde(samples: np.ndarray, grid: np.ndarray, bw: float,
+         *, period: float | None = None) -> np.ndarray:
+    """Gaussian KDE of `samples` evaluated on `grid`.
+
+    When `period` is set the kernel distance wraps onto that period, so the
+    dihedral density is continuous across ±180° instead of leaking off the edge.
+    """
+    d = grid[:, None] - samples[None, :]
+    if period is not None:
+        d = (d + period / 2.0) % period - period / 2.0
+    k = np.exp(-0.5 * (d / bw) ** 2)
+    return k.sum(axis=1) / (samples.size * bw * np.sqrt(2.0 * np.pi))
+
+
+def _jacobian(grid: np.ndarray, kind: str) -> np.ndarray:
+    """Geometric volume element J(q): r² for a bond, sinθ for the angle, 1 else."""
+    if kind == "bond":
+        return grid ** 2
+    if kind == "angle":
+        return np.sin(np.deg2rad(grid))
+    return np.ones_like(grid)
+
+
+def _pmf(density: np.ndarray, grid: np.ndarray, kind: str, kT: float,
+         *, floor_frac: float = 1e-2) -> np.ndarray:
+    """Potential of mean force W(q) = -kT ln[P(q)/J(q)], zeroed at its minimum.
+
+    Returns NaN where the sampled density falls below `floor_frac` of its peak,
+    so undersampled tails break the line rather than diverging to ±∞.
+    """
+    jac = _jacobian(grid, kind)
+    good = density > floor_frac * density.max()
+    w = np.full_like(grid, np.nan)
+    w[good] = -kT * np.log(density[good] / jac[good])
+    w[good] -= np.nanmin(w[good])
+    return w
 
 
 def plot_compare(
@@ -188,36 +256,63 @@ def plot_compare(
     runs: List[Dict[str, np.ndarray]],
     labels: List[str],
     out_path: Path,
+    *,
+    temperature: float,
 ) -> None:
     import matplotlib.pyplot as plt
 
-    fig, axes = plt.subplots(1, len(PANEL_SPEC), figsize=(3.5 * len(PANEL_SPEC), 3.2))
+    kT = KB_KCAL * temperature
+    n = len(PANEL_SPEC)
+    fig, axes = plt.subplots(2, n, figsize=(3.5 * n, 5.6), sharex="col",
+                             gridspec_kw=dict(height_ratios=[1.0, 1.0]))
     colors = plt.rcParams["axes.prop_cycle"].by_key()["color"]
 
-    for ax, (key, xlabel, lo, hi) in zip(axes, PANEL_SPEC):
+    for col, (key, xlabel, lo, hi, kind) in enumerate(PANEL_SPEC):
+        ax_d, ax_w = axes[0, col], axes[1, col]
         ref = training[key]
-        # Use the training-data range to pick bin edges unless overridden.
+        period = 360.0 if kind == "dihedral" else None
+
         if lo is None or hi is None:
             lo_use, hi_use = float(ref.min()), float(ref.max())
-            # Pad a touch so the model runs that explore outside the training
+            # Pad a touch so model runs that explore outside the training
             # range are still visible.
             pad = 0.1 * (hi_use - lo_use)
             lo_use, hi_use = lo_use - pad, hi_use + pad
         else:
             lo_use, hi_use = lo, hi
-        bins = np.linspace(lo_use, hi_use, 40)
+        grid = np.linspace(lo_use, hi_use, 400)
 
-        ax.hist(ref, bins=bins, density=True, color="0.7", alpha=0.7,
-                label="training", zorder=1)
+        # One bandwidth per panel, taken from the training data, so every
+        # curve in the panel is smoothed identically and stays comparable.
+        bw = _bandwidth(ref, periodic=period is not None)
+
+        ref_d = _kde(ref, grid, bw, period=period)
+        ax_d.fill_between(grid, ref_d, color="0.78", alpha=0.85,
+                          label="training", zorder=1)
+        ax_d.plot(grid, ref_d, color="0.45", linewidth=1.0, zorder=2)
+        ax_w.plot(grid, _pmf(ref_d, grid, kind, kT), color="0.45",
+                  linewidth=2.2, label="training", zorder=2)
+
         for i, (run, lab) in enumerate(zip(runs, labels)):
-            ax.hist(run[key], bins=bins, density=True, histtype="step",
-                    linewidth=1.6, color=colors[i % len(colors)],
-                    label=lab, zorder=2 + i)
-        ax.set_xlabel(xlabel)
-        ax.set_ylabel("density")
-        ax.set_xlim(lo_use, hi_use)
+            c = colors[i % len(colors)]
+            dens = _kde(run[key], grid, bw, period=period)
+            ax_d.plot(grid, dens, color=c, linewidth=1.7,
+                      label=lab, zorder=3 + i)
+            ax_w.plot(grid, _pmf(dens, grid, kind, kT), color=c,
+                      linewidth=1.7, zorder=3 + i)
 
-    axes[0].legend(loc="upper left", fontsize=8, frameon=False)
+        ax_d.set_title(xlabel)
+        ax_d.set_ylabel("density" if col == 0 else "")
+        ax_d.set_ylim(bottom=0)
+        ax_d.set_xlim(lo_use, hi_use)
+        ax_w.set_xlabel(xlabel)
+        ax_w.set_ylabel("W (kcal/mol)" if col == 0 else "")
+        ax_w.set_ylim(bottom=-0.05)
+
+    axes[0, 0].legend(loc="upper left", fontsize=8, frameon=False)
+    fig.suptitle("distribution P(q)  (top)   and   energy profile "
+                 f"W(q) = −kT ln[P/J]  (bottom),   T = {temperature:.0f} K",
+                 fontsize=10)
     fig.tight_layout()
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=140)
@@ -228,10 +323,10 @@ def plot_compare(
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--checkpoint", action="append", required=True,
+    p.add_argument("-c", "--checkpoint", action="append", required=True,
                    type=Path, dest="checkpoints",
                    help="A checkpoint to compare. Repeat for each one.")
-    p.add_argument("--label", action="append", default=None, dest="labels",
+    p.add_argument("-l", "--label", action="append", default=None, dest="labels",
                    help="Human-readable label for the corresponding --checkpoint. "
                         "Repeat in the same order; defaults to the checkpoint stem.")
     p.add_argument("--xyz", type=Path, default=Path("data/ethanol_subset.xyz"))
@@ -284,7 +379,8 @@ def main() -> None:
               f"<CC>={obs['CC'].mean():.3f}±{obs['CC'].std():.3f} A")
         runs.append(obs)
 
-    plot_compare(training, runs, labels, args.out / "observables.png")
+    plot_compare(training, runs, labels, args.out / "observables.png",
+                 temperature=args.temperature)
 
 
 if __name__ == "__main__":
